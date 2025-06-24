@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "869089378691",
+    "project_id": "ble-firebase-app",
+    "storage_bucket": "ble-firebase-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:869089378691:android:60070026e5f653405276b6",
+        "android_client_info": {
+          "package_name": "com.example.ble_firebase_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAo_5Xw1-CNlzkVsk_P-abkzJE_CHNeEas"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
