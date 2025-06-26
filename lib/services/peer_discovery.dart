@@ -1,20 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-
 import 'package:ble_firebase_app/models/peer_data.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
+import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 
 class PeerDiscoveryService extends ChangeNotifier {
-  static const String SERVICE_UUID = "12345678-1234-5678-9abc-123456789abc";
+  static const String SERVICE_UUID = "a1b2c3d4-e5f6-7890-abcd-1234567890ab";
   static const String CHARACTERISTIC_UUID =
-      "87654321-4321-8765-cba9-987654321cba";
-  static const int MANUFACTURER_ID = 0xFFFF;
-  static const int PEER_THRESHOLD = 5;
+      "a1b2c3d5-e5f6-7890-abcd-1234567890ab";
+
+  static const String APP_NAME_PREFIX = "PeerApp";
+  static const int PEER_THRESHOLD = 2;
 
   final DatabaseReference _database;
   final String _deviceId;
@@ -33,16 +34,17 @@ class PeerDiscoveryService extends ChangeNotifier {
   StreamSubscription<BluetoothAdapterState>? _bluetoothStateSubscription;
   Timer? _uploadTimer;
   Timer? _advertisingTimer;
+  final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
 
   PeerDiscoveryService()
       : _database = FirebaseDatabase.instance.ref(),
         _deviceId = const Uuid().v4().substring(0, 8),
-        _deviceName = 'PeerDevice_${const Uuid().v4().substring(0, 4)}' {
+        _deviceName =
+            '${APP_NAME_PREFIX}_${const Uuid().v4().substring(0, 8)}' {
     _initializeBluetooth();
     _checkPermissions();
   }
 
-  // Getters
   String get deviceId => _deviceId;
   String get deviceName => _deviceName;
   bool get isScanning => _isScanning;
@@ -123,7 +125,9 @@ class PeerDiscoveryService extends ChangeNotifier {
       _connectionStatus = 'scanning';
       notifyListeners();
 
+      // ALTERNATIVE APPROACH: Scan for all devices, filter by name pattern
       await FlutterBluePlus.startScan(
+        // Remove service filtering since we can't advertise the service UUID
         timeout: const Duration(seconds: 30),
         androidUsesFineLocation: false,
       );
@@ -146,22 +150,23 @@ class PeerDiscoveryService extends ChangeNotifier {
   void _processScanResults(List<ScanResult> results) {
     for (final result in results) {
       try {
-        final peerId = _extractPeerId(result);
-        if (peerId == null || peerId == _deviceId) continue;
+        final peerInfo = _extractPeerInfo(result);
+        if (peerInfo == null || peerInfo['deviceId'] == _deviceId) continue;
+
+        final peerId = peerInfo['deviceId'] as String;
+        final peerName = peerInfo['deviceName'] as String;
 
         final peerData = PeerData(
           deviceId: peerId,
-          deviceName: result.device.platformName.isNotEmpty
-              ? result.device.platformName
-              : (result.advertisementData.advName.isNotEmpty
-                  ? result.advertisementData.advName
-                  : 'Unknown'),
+          deviceName: peerName,
           discoveredAt: DateTime.now(),
           rssi: result.rssi,
         );
 
         if (!_discoveredPeers.containsKey(peerId)) {
           _discoveredPeers[peerId] = peerData;
+
+          debugPrint('✅ Discovered app user: $peerId ($peerName)');
 
           if (_discoveredPeers.length >= PEER_THRESHOLD &&
               _firebaseStatus == 'ready') {
@@ -176,39 +181,43 @@ class PeerDiscoveryService extends ChangeNotifier {
     }
   }
 
-  String? _extractPeerId(ScanResult result) {
+  Map<String, String>? _extractPeerInfo(ScanResult result) {
     try {
-      // Check manufacturer data
-      if (result.advertisementData.manufacturerData
-          .containsKey(MANUFACTURER_ID)) {
-        final data =
-            result.advertisementData.manufacturerData[MANUFACTURER_ID]!;
-        if (data.isNotEmpty) {
-          try {
-            return utf8.decode(data).trim();
-          } catch (e) {
-            debugPrint('Error decoding manufacturer data: $e');
-          }
+      String deviceName = result.device.platformName.isNotEmpty
+          ? result.device.platformName
+          : result.advertisementData.advName;
+
+      if (deviceName.startsWith('${APP_NAME_PREFIX}_')) {
+        final parts = deviceName.split('_');
+        if (parts.length >= 2) {
+          return {
+            'deviceId': parts[1],
+            'deviceName': deviceName,
+          };
         }
       }
-
-      // Check service data
-      final serviceGuid = Guid(SERVICE_UUID);
-      if (result.advertisementData.serviceData.containsKey(serviceGuid)) {
-        final data = result.advertisementData.serviceData[serviceGuid]!;
-        if (data.isNotEmpty) {
-          try {
-            return utf8.decode(data).trim();
-          } catch (e) {
-            debugPrint('Error decoding service data: $e');
-          }
-        }
-      }
-
-      // Fallback: use device remote ID if no custom data found
-      return result.device.remoteId.toString();
+      return null;
     } catch (e) {
-      debugPrint('Error extracting peer ID: $e');
+      debugPrint('Error extracting peer info: $e');
+      return null;
+    }
+  }
+
+  String? _extractIdFromManufacturerData(ScanResult result) {
+    try {
+      for (final entry in result.advertisementData.manufacturerData.entries) {
+        final data = entry.value;
+        if (data.isNotEmpty) {
+          final decodedData = utf8.decode(data).trim();
+
+          if (decodedData.length >= 6 && decodedData.length <= 12) {
+            return decodedData;
+          }
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error extracting from manufacturer data: $e');
       return null;
     }
   }
@@ -218,54 +227,6 @@ class PeerDiscoveryService extends ChangeNotifier {
     _stopScanning();
     _connectionStatus = 'scan_error';
     notifyListeners();
-  }
-
-  Future<void> startBroadcasting() async {
-    if (_isBroadcasting || !_isBluetoothEnabled || !await _checkPermissions())
-      return;
-
-    try {
-      _isBroadcasting = true;
-      notifyListeners();
-
-      final mData = Uint8List.fromList(utf8.encode(_deviceId.padRight(8)));
-      await _startAdvertising(mData);
-
-      _advertisingTimer = Timer.periodic(const Duration(seconds: 20), (_) {
-        if (_isBroadcasting) _startAdvertising(mData);
-      });
-    } catch (e) {
-      debugPrint('Start broadcasting error: $e');
-      _stopBroadcasting();
-    }
-  }
-
-  Future<void> stopBroadcasting() async {
-    await _stopBroadcasting();
-  }
-
-  Future<void> _startAdvertising(Uint8List mData) async {
-    try {
-      // Note: Flutter Blue Plus doesn't have built-in advertising support
-      // You'll need to use a different approach for BLE advertising
-      // Option 1: Use flutter_ble_peripheral plugin
-      // Option 2: Use platform-specific code
-      // Option 3: Simulate advertising by frequently updating scan data
-
-      debugPrint(
-          'Warning: BLE advertising not directly supported by Flutter Blue Plus');
-      debugPrint(
-          'Consider using flutter_ble_peripheral plugin for advertising functionality');
-
-      // Temporary workaround - you might want to implement alternative advertising
-      // using a different plugin or platform channels
-    } catch (e) {
-      debugPrint('Advertising error: $e');
-      if (_isBroadcasting) {
-        await Future.delayed(const Duration(seconds: 1));
-        await _startAdvertising(mData);
-      }
-    }
   }
 
   Future<void> _stopScanning() async {
@@ -283,17 +244,42 @@ class PeerDiscoveryService extends ChangeNotifier {
     }
   }
 
+  Future<void> startBroadcasting() async {
+    if (_isBroadcasting || !_isBluetoothEnabled || !await _checkPermissions())
+      return;
+
+    try {
+      _isBroadcasting = true;
+      notifyListeners();
+
+      final advertiseData = AdvertiseData(
+        includeDeviceName: true,
+        localName: _deviceName,
+        manufacturerData: utf8.encode(_deviceId),
+      );
+
+      await _blePeripheral.start(advertiseData: advertiseData);
+
+      debugPrint('🔊 Broadcasting as: $_deviceName');
+    } catch (e) {
+      debugPrint('Start broadcasting error: $e');
+      _stopBroadcasting();
+    }
+  }
+
+  Future<void> stopBroadcasting() async {
+    await _stopBroadcasting();
+  }
+
   Future<void> _stopBroadcasting() async {
     if (!_isBroadcasting) return;
 
     try {
+      await _blePeripheral.stop();
       _advertisingTimer?.cancel();
       _advertisingTimer = null;
-
-      // Note: No stopAdvertising method needed since we're not actually advertising
-      // If using flutter_ble_peripheral, you would call its stop method here
-
       _isBroadcasting = false;
+      debugPrint('🔇 Stopped broadcasting');
       notifyListeners();
     } catch (e) {
       debugPrint('Stop broadcasting error: $e');
@@ -308,22 +294,6 @@ class PeerDiscoveryService extends ChangeNotifier {
   }
 
   Future<void> uploadToFirebase() async {
-    // SIMULATE FAKE PEERS FOR TESTING (Only on single device)/////////
-    if (_discoveredPeers.length < 2) {
-      _discoveredPeers['testpeer1'] = PeerData(
-        deviceId: 'testpeer1',
-        deviceName: 'FakeDevice1',
-        discoveredAt: DateTime.now(),
-        rssi: -60,
-      );
-      _discoveredPeers['testpeer2'] = PeerData(
-        deviceId: 'testpeer2',
-        deviceName: 'FakeDevice2',
-        discoveredAt: DateTime.now(),
-        rssi: -70,
-      );
-    }
-///////////
     if (_discoveredPeers.length < PEER_THRESHOLD || _firebaseStatus != 'ready')
       return;
 
@@ -339,12 +309,21 @@ class PeerDiscoveryService extends ChangeNotifier {
         peerCount: _discoveredPeers.length,
       );
 
+      debugPrint('📤 Uploading session with ${session.peerCount} app users');
+
       final updates = <String, dynamic>{
         'discovery_sessions/${session.sessionId}': session.toJson(),
         'devices/$_deviceId': {
+          'device_name': _deviceName,
           'last_seen': ServerValue.timestamp,
+          'app_version': '1.0.0', // Add app version tracking
           'peers': _discoveredPeers.map((k, v) => MapEntry(k, v.toJson())),
         },
+        // Also track the peer relationships
+        'peer_connections/${_deviceId}': {
+          'timestamp': ServerValue.timestamp,
+          'connected_peers': _discoveredPeers.keys.toList(),
+        }
       };
 
       await _database.update(updates);
@@ -353,7 +332,11 @@ class PeerDiscoveryService extends ChangeNotifier {
       if (_uploadHistory.length > 50) _uploadHistory.removeLast();
 
       _firebaseStatus = 'success';
+
+      // Clear discovered peers after successful upload
       _discoveredPeers.clear();
+
+      debugPrint('✅ Successfully uploaded peer data to Firebase');
       notifyListeners();
 
       Future.delayed(const Duration(seconds: 2), () {
@@ -363,7 +346,7 @@ class PeerDiscoveryService extends ChangeNotifier {
         }
       });
     } catch (e) {
-      debugPrint('Firebase upload error: $e');
+      debugPrint('❌ Firebase upload error: $e');
       _firebaseStatus = 'error';
       notifyListeners();
 
@@ -376,10 +359,37 @@ class PeerDiscoveryService extends ChangeNotifier {
     }
   }
 
+  // Helper method to manually trigger upload (for testing)
+  Future<void> forceUpload() async {
+    if (_discoveredPeers.isNotEmpty) {
+      await uploadToFirebase();
+    }
+  }
+
+  // Method to clear discovered peers
+  void clearDiscoveredPeers() {
+    _discoveredPeers.clear();
+    notifyListeners();
+  }
+
+  // Get statistics
+  Map<String, dynamic> getStatistics() {
+    return {
+      'total_sessions': _uploadHistory.length,
+      'current_peers': _discoveredPeers.length,
+      'device_id': _deviceId,
+      'device_name': _deviceName,
+      'is_scanning': _isScanning,
+      'is_broadcasting': _isBroadcasting,
+      'bluetooth_enabled': _isBluetoothEnabled,
+    };
+  }
+
   bool get mounted => hasListeners;
 
   @override
   void dispose() {
+    debugPrint('🔄 Disposing PeerDiscoveryService');
     _stopScanning();
     _stopBroadcasting();
     _uploadTimer?.cancel();

@@ -39,6 +39,7 @@ class PeerDiscoveryScreen extends StatelessWidget {
                         children: [
                           _buildControls(context, service),
                           _buildStatusIndicators(service),
+                          _buildThresholdIndicator(service),
                           Expanded(child: _buildDiscoveredPeers(service)),
                           _buildUploadHistory(service),
                         ],
@@ -81,7 +82,7 @@ class PeerDiscoveryScreen extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  'Device: ${service.deviceId}',
+                  'ID: ${service.deviceId.substring(0, 8)}...',
                   style: const TextStyle(
                     fontSize: 14,
                     color: Colors.white70,
@@ -191,6 +192,35 @@ class PeerDiscoveryScreen extends StatelessWidget {
     );
   }
 
+  Widget _buildThresholdIndicator(PeerDiscoveryService service) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: Column(
+        children: [
+          LinearProgressIndicator(
+            value: service.peerCount / PeerDiscoveryService.PEER_THRESHOLD,
+            backgroundColor: Colors.grey[200],
+            valueColor: AlwaysStoppedAnimation<Color>(
+              service.peerCount >= PeerDiscoveryService.PEER_THRESHOLD
+                  ? Colors.green
+                  : Colors.blue,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Discovered ${service.peerCount}/${PeerDiscoveryService.PEER_THRESHOLD} peers',
+            style: TextStyle(
+              color: service.peerCount >= PeerDiscoveryService.PEER_THRESHOLD
+                  ? Colors.green
+                  : Colors.blue,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDiscoveredPeers(PeerDiscoveryService service) {
     return Container(
       margin: const EdgeInsets.all(24),
@@ -249,7 +279,6 @@ class PeerDiscoveryScreen extends StatelessWidget {
                     },
                   ),
           ),
-          // In _buildDiscoveredPeers widget:
           if (service.peerCount >= PeerDiscoveryService.PEER_THRESHOLD)
             Container(
               padding: const EdgeInsets.all(12),
@@ -264,7 +293,7 @@ class PeerDiscoveryScreen extends StatelessWidget {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Threshold reached (${PeerDiscoveryService.PEER_THRESHOLD}+ peers) - Uploading to Firebase',
+                      'Threshold reached - Uploading to Firebase',
                       style: TextStyle(
                           color: Colors.green, fontWeight: FontWeight.w500),
                     ),
@@ -302,7 +331,9 @@ class PeerDiscoveryScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  peer.deviceId,
+                  peer.deviceId.length > 8
+                      ? '${peer.deviceId.substring(0, 8)}...'
+                      : peer.deviceId,
                   style: const TextStyle(
                       fontFamily: 'monospace', fontWeight: FontWeight.w500),
                 ),

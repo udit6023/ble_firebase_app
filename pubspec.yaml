@@ -42,6 +42,8 @@ dependencies:
   permission_handler: ^11.3.0
   uuid: ^4.3.3
   provider: ^6.1.1
+  flutter_ble_peripheral: 1.2.6
+
 
 dev_dependencies:
   flutter_test:

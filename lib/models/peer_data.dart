@@ -1,5 +1,3 @@
-// models/peer_data.dart
-
 class PeerData {
   final String deviceId;
   final String deviceName;
