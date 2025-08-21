@@ -1,9 +1,26 @@
 import 'package:ble_firebase_app/services/peer_discovery.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/peer_data.dart';
 
-class PeerDiscoveryScreen extends StatelessWidget {
+class PeerDiscoveryScreen extends StatefulWidget {
+  @override
+  _PeerDiscoveryScreenState createState() => _PeerDiscoveryScreenState();
+}
+
+class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Ensure the service is properly initialized when screen loads
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final service = Provider.of<PeerDiscoveryService>(context, listen: false);
+      debugPrint(
+          '🖥️ Screen initialized - Service status: ${service.connectionStatus}');
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -22,30 +39,41 @@ class PeerDiscoveryScreen extends StatelessWidget {
                 children: [
                   _buildHeader(service),
                   Expanded(
-                    child: Container(
-                      margin: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
-                            blurRadius: 10,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          _buildControls(context, service),
-                          _buildStatusIndicators(service),
-                          _buildThresholdIndicator(service),
-                          Expanded(child: _buildDiscoveredPeers(service)),
-                          _buildUploadHistory(service),
-                        ],
-                      ),
+                      child: Container(
+                    margin: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
-                  ),
+                    child: Column(children: [
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            children: [
+                              _buildControls(context, service),
+                              _buildStatusIndicators(service),
+                              _buildThresholdIndicator(service),
+                              Container(
+                                height: 200, // Fixed height to prevent overflow
+                                child: _buildDiscoveredPeers(service),
+                              )
+                            ],
+                          ),
+                        ),
+                      ),
+                      Container(
+                        height: 120, // Fixed height for upload history
+                        child: _buildUploadHistory(service),
+                      ),
+                    ]),
+                  ))
                 ],
               ),
             ),
@@ -66,7 +94,13 @@ class PeerDiscoveryScreen extends StatelessWidget {
               color: Colors.white.withOpacity(0.2),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.bluetooth, color: Colors.white, size: 28),
+            child: Icon(
+              service.isBluetoothEnabled
+                  ? (service.isActive ? Icons.sync : Icons.bluetooth)
+                  : Icons.bluetooth_disabled,
+              color: Colors.white,
+              size: 28,
+            ),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -82,12 +116,38 @@ class PeerDiscoveryScreen extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  'ID: ${service.deviceId.substring(0, 8)}...',
+                  'ID: ${service.deviceId}',
                   style: const TextStyle(
                     fontSize: 14,
                     color: Colors.white70,
+                    fontFamily: 'monospace',
                   ),
                 ),
+                Text(
+                  'Name: ${service.deviceName}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.white60,
+                  ),
+                ),
+                if (service.isActive)
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.8),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      '🔄 DISCOVERING PEERS',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -99,49 +159,119 @@ class PeerDiscoveryScreen extends StatelessWidget {
   Widget _buildControls(BuildContext context, PeerDiscoveryService service) {
     return Padding(
       padding: const EdgeInsets.all(24),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
+          // Main Discovery Button
+          SizedBox(
+            width: double.infinity,
             child: ElevatedButton.icon(
               onPressed: service.isBluetoothEnabled
-                  ? (service.isScanning
-                      ? service.stopScanning
-                      : service.startScanning)
+                  ? (service.isActive
+                      ? () async {
+                          debugPrint('🛑 User stopping discovery...');
+                          await service.stopDiscovery();
+                        }
+                      : () async {
+                          debugPrint('🚀 User starting discovery...');
+                          await service.startDiscovery();
+                        })
                   : null,
-              icon: Icon(service.isScanning ? Icons.stop : Icons.search),
-              label: Text(service.isScanning ? 'Stop Scan' : 'Start Scan'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: service.isScanning ? Colors.red : Colors.blue,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+              icon: Icon(
+                service.isActive ? Icons.stop : Icons.sync,
+                size: 24,
+              ),
+              label: Text(
+                service.isActive ? 'Stop Discovery' : 'Start Discovery',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
                 ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: service.isActive ? Colors.red : Colors.blue,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: service.isBluetoothEnabled ? 3 : 0,
               ),
             ),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: service.isBluetoothEnabled
-                  ? (service.isBroadcasting
-                      ? service.stopBroadcasting
-                      : service.startBroadcasting)
-                  : null,
-              icon: Icon(
-                  service.isBroadcasting ? Icons.stop_circle : Icons.radio),
-              label:
-                  Text(service.isBroadcasting ? 'Stop Broadcast' : 'Broadcast'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    service.isBroadcasting ? Colors.orange : Colors.green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+
+          const SizedBox(height: 16),
+
+          // Discovery Mode Explanation
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue[200]!),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.blue[700], size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    service.isActive
+                        ? '📡 Broadcasting & 🔍 Scanning simultaneously'
+                        : 'Tap to start broadcasting AND scanning for peers',
+                    style: TextStyle(
+                      color: Colors.blue[700],
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // Additional action buttons
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: service.discoveredPeers.isNotEmpty
+                      ? () async {
+                          debugPrint('🔄 User forcing upload...');
+                          await service.forceUpload();
+                        }
+                      : null,
+                  icon: const Icon(Icons.cloud_upload, size: 18),
+                  label: const Text('Force Upload'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: service.discoveredPeers.isNotEmpty
+                      ? () {
+                          debugPrint('🗑️ User clearing discovered peers...');
+                          service.clearDiscoveredAppUsers();
+                        }
+                      : null,
+                  icon: const Icon(Icons.clear_all, size: 18),
+                  label: const Text('Clear All'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -154,36 +284,43 @@ class PeerDiscoveryScreen extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
       ),
       child: Column(
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('BLE Status:',
-                  style: TextStyle(fontWeight: FontWeight.w500)),
-              Text(
-                service.connectionStatus,
-                style: TextStyle(
-                  color: _getStatusColor(service.connectionStatus),
-                  fontWeight: FontWeight.w500,
-                ),
+              _buildStatusChip(
+                'Bluetooth',
+                service.isBluetoothEnabled ? 'ON' : 'OFF',
+                service.isBluetoothEnabled ? Colors.green : Colors.red,
+                Icons.bluetooth,
+              ),
+              const SizedBox(width: 8),
+              _buildStatusChip(
+                'Discovery',
+                service.isActive ? 'ACTIVE' : 'STOPPED',
+                service.isActive ? Colors.blue : Colors.grey,
+                service.isActive ? Icons.sync : Icons.stop,
               ),
             ],
           ),
           const SizedBox(height: 8),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Firebase:',
-                  style: TextStyle(fontWeight: FontWeight.w500)),
-              Text(
-                service.firebaseStatus,
-                style: TextStyle(
-                  color: _getFirebaseStatusColor(service.firebaseStatus),
-                  fontWeight: FontWeight.w500,
-                ),
+              _buildStatusChip(
+                'Firebase',
+                _getFirebaseStatusText(service.firebaseStatus),
+                _getFirebaseStatusColor(service.firebaseStatus),
+                Icons.cloud,
+              ),
+              const SizedBox(width: 8),
+              _buildStatusChip(
+                'Connection',
+                _getConnectionStatusText(service.connectionStatus),
+                _getConnectionStatusColor(service.connectionStatus),
+                Icons.signal_cellular_alt,
               ),
             ],
           ),
@@ -192,27 +329,110 @@ class PeerDiscoveryScreen extends StatelessWidget {
     );
   }
 
+  Widget _buildStatusChip(
+      String label, String value, Color color, IconData icon) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.grey[600],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  Text(
+                    value,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: color,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildThresholdIndicator(PeerDiscoveryService service) {
+    final currentCount = service.appUserCount;
+    final threshold = PeerDiscoveryService.PEER_THRESHOLD;
+    final progress = currentCount / threshold;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      margin: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: currentCount >= threshold ? Colors.green[50] : Colors.orange[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: currentCount >= threshold
+              ? Colors.green[200]!
+              : Colors.orange[200]!,
+        ),
+      ),
       child: Column(
         children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Upload Threshold',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey[700],
+                ),
+              ),
+              Text(
+                '$currentCount / $threshold',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: currentCount >= threshold
+                      ? Colors.green[700]
+                      : Colors.orange[700],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           LinearProgressIndicator(
-            value: service.peerCount / PeerDiscoveryService.PEER_THRESHOLD,
-            backgroundColor: Colors.grey[200],
+            value: progress.clamp(0.0, 1.0),
+            backgroundColor: Colors.grey[300],
             valueColor: AlwaysStoppedAnimation<Color>(
-              service.peerCount >= PeerDiscoveryService.PEER_THRESHOLD
-                  ? Colors.green
-                  : Colors.blue,
+              currentCount >= threshold ? Colors.green : Colors.orange,
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            'Discovered ${service.peerCount}/${PeerDiscoveryService.PEER_THRESHOLD} peers',
+            currentCount >= threshold
+                ? '🎉 Ready to upload to Firebase!'
+                : 'Need ${threshold - currentCount} more peer${threshold - currentCount == 1 ? '' : 's'} to upload',
             style: TextStyle(
-              color: service.peerCount >= PeerDiscoveryService.PEER_THRESHOLD
-                  ? Colors.green
-                  : Colors.blue,
+              fontSize: 12,
+              color: currentCount >= threshold
+                  ? Colors.green[700]
+                  : Colors.orange[700],
               fontWeight: FontWeight.w500,
             ),
           ),
@@ -222,107 +442,140 @@ class PeerDiscoveryScreen extends StatelessWidget {
   }
 
   Widget _buildDiscoveredPeers(PeerDiscoveryService service) {
+    final peers = service.discoveredPeers;
+
     return Container(
-      margin: const EdgeInsets.all(24),
+      margin: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
+              Text(
                 'Discovered Peers',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[800],
+                ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.blue,
-                  borderRadius: BorderRadius.circular(16),
+                  color: Colors.blue[100],
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  '${service.peerCount}',
-                  style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold),
+                  '${peers.length}',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue[800],
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Expanded(
-            child: service.discoveredPeers.isEmpty
-                ? const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.bluetooth_searching,
-                            size: 48, color: Colors.grey),
-                        SizedBox(height: 16),
-                        Text(
-                          'No peers discovered yet',
-                          style: TextStyle(color: Colors.grey, fontSize: 16),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Start scanning to find nearby devices',
-                          style: TextStyle(color: Colors.grey, fontSize: 14),
-                        ),
-                      ],
-                    ),
-                  )
+            child: peers.isEmpty
+                ? _buildEmptyPeersState(service)
                 : ListView.builder(
-                    itemCount: service.discoveredPeers.length,
+                    itemCount: peers.length,
                     itemBuilder: (context, index) {
-                      final peer = service.discoveredPeers[index];
-                      return _buildPeerCard(peer);
+                      final peer = peers[index];
+                      return _buildPeerCard(peer, index);
                     },
                   ),
           ),
-          if (service.peerCount >= PeerDiscoveryService.PEER_THRESHOLD)
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.green[50],
-                border: Border.all(color: Colors.green[200]!),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.check_circle, color: Colors.green, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Threshold reached - Uploading to Firebase',
-                      style: TextStyle(
-                          color: Colors.green, fontWeight: FontWeight.w500),
-                    ),
-                  ),
-                ],
-              ),
-            ),
         ],
       ),
     );
   }
 
-  Widget _buildPeerCard(PeerData peer) {
+  Widget _buildEmptyPeersState(PeerDiscoveryService service) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            service.isActive ? Icons.search : Icons.bluetooth_searching,
+            size: 64,
+            color: Colors.grey[400],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            service.isActive
+                ? 'Searching for peers...'
+                : 'No peers discovered yet',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w500,
+              color: Colors.grey[600],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            service.isActive
+                ? 'Make sure other devices are running the app'
+                : 'Start discovery to find nearby peers',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey[500],
+            ),
+            textAlign: TextAlign.center,
+          ),
+          if (service.isActive) ...[
+            const SizedBox(height: 16),
+            const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPeerCard(PeerData peer, int index) {
+    final timeAgo = _getTimeAgo(peer.discoveredAt);
+    final signalStrength = _getSignalStrength(peer.rssi);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border.all(color: Colors.grey[200]!),
         borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         children: [
           Container(
-            width: 8,
-            height: 8,
-            decoration: const BoxDecoration(
-              color: Colors.green,
-              shape: BoxShape.circle,
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.blue[100],
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Center(
+              child: Text(
+                '${index + 1}',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue[800],
+                ),
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -331,30 +584,68 @@ class PeerDiscoveryScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  peer.deviceId.length > 8
-                      ? '${peer.deviceId.substring(0, 8)}...'
-                      : peer.deviceId,
+                  peer.deviceName,
                   style: const TextStyle(
-                      fontFamily: 'monospace', fontWeight: FontWeight.w500),
-                ),
-                if (peer.deviceName != 'Unknown')
-                  Text(
-                    peer.deviceName,
-                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
                   ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'ID: ${peer.deviceId}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                Text(
+                  'Discovered $timeAgo',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey[500],
+                  ),
+                ),
               ],
             ),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(
-                '${peer.rssi} dBm',
-                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    signalStrength['icon'],
+                    size: 16,
+                    color: signalStrength['color'],
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${peer.rssi} dBm',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: signalStrength['color'],
+                    ),
+                  ),
+                ],
               ),
-              Text(
-                _formatTime(peer.discoveredAt),
-                style: TextStyle(color: Colors.grey[500], fontSize: 10),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.green[100],
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  'ACTIVE',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green[700],
+                  ),
+                ),
               ),
             ],
           ),
@@ -364,59 +655,96 @@ class PeerDiscoveryScreen extends StatelessWidget {
   }
 
   Widget _buildUploadHistory(PeerDiscoveryService service) {
-    if (service.uploadHistory.isEmpty) return const SizedBox.shrink();
+    final history = service.uploadHistory.take(3).toList();
+
+    if (history.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return Container(
-      height: 120,
       margin: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Upload History',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          Row(
+            children: [
+              Icon(Icons.history, size: 18, color: Colors.grey[600]),
+              const SizedBox(width: 8),
+              Text(
+                'Recent Uploads',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey[700],
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${service.uploadHistory.length} total',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[500],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
+          ...history
+              .map((session) => _buildUploadHistoryItem(session))
+              .toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUploadHistoryItem(DiscoverySession session) {
+    final timeAgo = _getTimeAgo(session.timestamp);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.cloud_done, size: 16, color: Colors.green[600]),
+          const SizedBox(width: 8),
           Expanded(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: service.uploadHistory.length,
-              itemBuilder: (context, index) {
-                final session = service.uploadHistory[index];
-                return Container(
-                  width: 120,
-                  margin: const EdgeInsets.only(right: 8),
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.blue[50],
-                    borderRadius: BorderRadius.circular(8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${session.peerCount} peers uploaded',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Session',
-                        style: TextStyle(fontSize: 12, color: Colors.blue[800]),
-                      ),
-                      Text(
-                        session.sessionId.substring(0, 8),
-                        style: const TextStyle(
-                            fontSize: 10, fontFamily: 'monospace'),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${session.peerCount} peers',
-                        style: const TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.w500),
-                      ),
-                      Text(
-                        _formatTime(session.timestamp),
-                        style: TextStyle(fontSize: 10, color: Colors.grey[600]),
-                      ),
-                    ],
+                ),
+                Text(
+                  timeAgo,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey[500],
                   ),
-                );
-              },
+                ),
+              ],
+            ),
+          ),
+          Text(
+            session.sessionId.substring(0, 8),
+            style: TextStyle(
+              fontSize: 10,
+              color: Colors.grey[500],
+              fontFamily: 'monospace',
             ),
           ),
         ],
@@ -424,23 +752,26 @@ class PeerDiscoveryScreen extends StatelessWidget {
     );
   }
 
-  Color _getStatusColor(String status) {
+  // Helper methods
+  String _getFirebaseStatusText(String status) {
     switch (status) {
-      case 'scanning':
-        return Colors.blue;
-      case 'connected':
-        return Colors.green;
-      case 'bluetooth_off':
-        return Colors.red;
-      case 'permission_denied':
-        return Colors.orange;
+      case 'ready':
+        return 'READY';
+      case 'uploading':
+        return 'UPLOADING';
+      case 'success':
+        return 'SUCCESS';
+      case 'error':
+        return 'ERROR';
       default:
-        return Colors.grey;
+        return status.toUpperCase();
     }
   }
 
   Color _getFirebaseStatusColor(String status) {
     switch (status) {
+      case 'ready':
+        return Colors.blue;
       case 'uploading':
         return Colors.orange;
       case 'success':
@@ -452,7 +783,64 @@ class PeerDiscoveryScreen extends StatelessWidget {
     }
   }
 
-  String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  String _getConnectionStatusText(String status) {
+    switch (status) {
+      case 'ready':
+        return 'READY';
+      case 'discovering':
+        return 'DISCOVERING';
+      case 'bluetooth_off':
+        return 'BT OFF';
+      case 'permission_denied':
+        return 'NO PERMISSION';
+      case 'discovery_error':
+        return 'ERROR';
+      default:
+        return status.toUpperCase();
+    }
+  }
+
+  Color _getConnectionStatusColor(String status) {
+    switch (status) {
+      case 'ready':
+        return Colors.green;
+      case 'discovering':
+        return Colors.blue;
+      case 'bluetooth_off':
+        return Colors.orange;
+      case 'permission_denied':
+        return Colors.red;
+      case 'discovery_error':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  Map<String, dynamic> _getSignalStrength(int rssi) {
+    if (rssi >= -50) {
+      return {'icon': Icons.signal_cellular_4_bar, 'color': Colors.green};
+    } else if (rssi >= -70) {
+      return {'icon': Icons.signal_cellular_0_bar, 'color': Colors.orange};
+    } else if (rssi >= -85) {
+      return {'icon': Icons.signal_cellular_0_bar, 'color': Colors.orange};
+    } else {
+      return {'icon': Icons.signal_cellular_0_bar, 'color': Colors.red};
+    }
+  }
+
+  String _getTimeAgo(DateTime dateTime) {
+    final now = DateTime.now();
+    final difference = now.difference(dateTime);
+
+    if (difference.inSeconds < 60) {
+      return 'just now';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours}h ago';
+    } else {
+      return DateFormat('MMM d, HH:mm').format(dateTime);
+    }
   }
 }

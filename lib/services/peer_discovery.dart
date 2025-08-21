@@ -10,32 +10,39 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 
 class PeerDiscoveryService extends ChangeNotifier {
-  static const String SERVICE_UUID = "a1b2c3d4-e5f6-7890-abcd-1234567890ab";
+  // 🔑 UNIQUE IDENTIFIERS - Simplified for reliability
+  static const String SERVICE_UUID = "12345678-1234-5678-9abc-123456789012";
   static const String CHARACTERISTIC_UUID =
-      "a1b2c3d5-e5f6-7890-abcd-1234567890ab";
-
+      "12345678-1234-5678-9abc-123456789013";
+  static const String APP_SIGNATURE = "PEERAPP2024";
   static const String APP_NAME_PREFIX = "PeerApp";
   static const int PEER_THRESHOLD = 2;
+  static const int MANUFACTURER_ID =
+      0x004C; // Apple's manufacturer ID (more reliable)
 
+  // 📱 DEVICE INFO
   final DatabaseReference _database;
   final String _deviceId;
   final String _deviceName;
 
-  bool _isScanning = false;
-  bool _isBroadcasting = false;
+  // 🔄 STATE MANAGEMENT - BOTH SCANNING AND BROADCASTING
+  bool _isActive = false; // Combined state for both operations
   bool _isBluetoothEnabled = false;
   String _connectionStatus = 'disconnected';
   String _firebaseStatus = 'ready';
 
-  final Map<String, PeerData> _discoveredPeers = {};
+  // 📊 DATA STORAGE - ONLY APP USERS
+  final Map<String, PeerData> _discoveredAppUsers = {};
   final List<DiscoverySession> _uploadHistory = [];
 
+  // 🎛️ SUBSCRIPTIONS & TIMERS
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<BluetoothAdapterState>? _bluetoothStateSubscription;
   Timer? _uploadTimer;
-  Timer? _advertisingTimer;
+  Timer? _discoveryTimer;
   final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
 
+  // 🚀 CONSTRUCTOR
   PeerDiscoveryService()
       : _database = FirebaseDatabase.instance.ref(),
         _deviceId = const Uuid().v4().substring(0, 8),
@@ -45,17 +52,21 @@ class PeerDiscoveryService extends ChangeNotifier {
     _checkPermissions();
   }
 
+  // 📖 GETTERS
   String get deviceId => _deviceId;
   String get deviceName => _deviceName;
-  bool get isScanning => _isScanning;
-  bool get isBroadcasting => _isBroadcasting;
+  bool get isActive => _isActive; // Both scanning and broadcasting
+  bool get isScanning => _isActive; // For backward compatibility
+  bool get isBroadcasting => _isActive; // For backward compatibility
   bool get isBluetoothEnabled => _isBluetoothEnabled;
   String get connectionStatus => _connectionStatus;
   String get firebaseStatus => _firebaseStatus;
-  List<PeerData> get discoveredPeers => _discoveredPeers.values.toList();
+  List<PeerData> get discoveredPeers => _discoveredAppUsers.values.toList();
+  List<String> get appUserIds => _discoveredAppUsers.keys.toList();
+  int get appUserCount => _discoveredAppUsers.length;
   List<DiscoverySession> get uploadHistory => _uploadHistory;
-  int get peerCount => _discoveredPeers.length;
 
+  // 🔵 BLUETOOTH INITIALIZATION
   Future<void> _initializeBluetooth() async {
     try {
       bool isAvailable = await FlutterBluePlus.isSupported;
@@ -69,24 +80,30 @@ class PeerDiscoveryService extends ChangeNotifier {
           FlutterBluePlus.adapterState.listen((state) {
         _isBluetoothEnabled = state == BluetoothAdapterState.on;
         _connectionStatus = _isBluetoothEnabled ? 'ready' : 'bluetooth_off';
+
         if (!_isBluetoothEnabled) {
-          _stopScanning();
-          _stopBroadcasting();
+          _stopDiscovery();
         }
+
+        debugPrint('🔵 Bluetooth state: ${_isBluetoothEnabled ? 'ON' : 'OFF'}');
         notifyListeners();
       });
 
       final state = await FlutterBluePlus.adapterState.first;
       _isBluetoothEnabled = state == BluetoothAdapterState.on;
       _connectionStatus = _isBluetoothEnabled ? 'ready' : 'bluetooth_off';
+
+      debugPrint(
+          '🔵 Bluetooth initialized: ${_isBluetoothEnabled ? 'Ready' : 'Not Ready'}');
       notifyListeners();
     } catch (e) {
-      debugPrint('Bluetooth init error: $e');
+      debugPrint('❌ Bluetooth init error: $e');
       _connectionStatus = 'bluetooth_error';
       notifyListeners();
     }
   }
 
+  // 🔐 PERMISSION HANDLING
   Future<bool> _checkPermissions() async {
     try {
       if (defaultTargetPlatform == TargetPlatform.android) {
@@ -102,190 +119,346 @@ class PeerDiscoveryService extends ChangeNotifier {
             statuses.values.every((s) => s.isGranted || s.isLimited);
 
         if (!allGranted) {
+          debugPrint('❌ Permissions denied: $statuses');
           _connectionStatus = 'permission_denied';
           notifyListeners();
           return false;
         }
       }
+
+      debugPrint('✅ All permissions granted');
       return true;
     } catch (e) {
-      debugPrint('Permission error: $e');
+      debugPrint('❌ Permission error: $e');
       _connectionStatus = 'permission_error';
       notifyListeners();
       return false;
     }
   }
 
-  Future<void> startScanning() async {
-    if (_isScanning || !_isBluetoothEnabled || !await _checkPermissions())
+  // 🚀 START PEER DISCOVERY (BOTH BROADCAST AND SCAN)
+  Future<void> startDiscovery() async {
+    if (_isActive || !_isBluetoothEnabled) {
+      debugPrint(
+          '⚠️ Cannot start discovery: isActive=$_isActive, bluetoothEnabled=$_isBluetoothEnabled');
       return;
+    }
+
+    if (!await _checkPermissions()) {
+      debugPrint('❌ Permissions not granted');
+      return;
+    }
 
     try {
-      _isScanning = true;
-      _connectionStatus = 'scanning';
+      _isActive = true;
+      _connectionStatus = 'discovering';
       notifyListeners();
 
-      // ALTERNATIVE APPROACH: Scan for all devices, filter by name pattern
+      debugPrint('🚀 STARTING PEER DISCOVERY MODE');
+      debugPrint('   📡 Broadcasting: Making device discoverable');
+      debugPrint('   🔍 Scanning: Looking for other app users');
+      debugPrint('   My Device ID: $_deviceId');
+      debugPrint('   My Device Name: $_deviceName');
+
+      // Clear previous discoveries
+      _discoveredAppUsers.clear();
+
+      // Start both broadcasting and scanning simultaneously
+      await _startBroadcasting();
+      await _startScanning();
+
+      // Start continuous discovery with periodic refresh
+      _startDiscoveryTimer();
+    } catch (e) {
+      debugPrint('❌ Start discovery error: $e');
+      _handleDiscoveryError(e);
+    }
+  }
+
+  // 📡 START BROADCASTING
+  Future<void> _startBroadcasting() async {
+    try {
+      // Create manufacturer data with app signature and device ID
+      final manufacturerDataString = '$APP_SIGNATURE$_deviceId';
+      final manufacturerDataBytes = utf8.encode(manufacturerDataString);
+
+      final advertiseData = AdvertiseData(
+        includeDeviceName: true,
+        localName: _deviceName,
+        manufacturerData: manufacturerDataBytes,
+        manufacturerId: MANUFACTURER_ID,
+        serviceUuid: SERVICE_UUID,
+      );
+
+      await _blePeripheral.start(advertiseData: advertiseData);
+
+      debugPrint('📡 BROADCASTING STARTED:');
+      debugPrint('   ✅ Device Name: $_deviceName');
+      debugPrint('   ✅ Device ID: $_deviceId');
+      debugPrint('   ✅ Service UUID: $SERVICE_UUID');
+      debugPrint('   ✅ Other app users can now discover this device!');
+    } catch (e) {
+      debugPrint('❌ Start broadcasting error: $e');
+      throw e;
+    }
+  }
+
+  // 🔍 START SCANNING
+  Future<void> _startScanning() async {
+    try {
+      debugPrint('🔍 SCANNING STARTED:');
+      debugPrint('   Looking for Service: $SERVICE_UUID');
+
+      // Start scanning with service filter
       await FlutterBluePlus.startScan(
-        // Remove service filtering since we can't advertise the service UUID
+        withServices: [Guid(SERVICE_UUID)],
         timeout: const Duration(seconds: 30),
         androidUsesFineLocation: false,
       );
 
       _scanSubscription = FlutterBluePlus.scanResults.listen(
-        (results) => _processScanResults(results),
-        onError: (e) => _handleScanError(e),
+        (results) {
+          if (results.isNotEmpty) {
+            debugPrint('📡 Scan results: ${results.length} devices found');
+            _processScanResults(results);
+          }
+        },
+        onError: (e) {
+          debugPrint('❌ Scan error: $e');
+          _handleDiscoveryError(e);
+        },
       );
-
-      Timer(const Duration(seconds: 30), () => _stopScanning());
     } catch (e) {
-      _handleScanError(e);
+      debugPrint('❌ Start scanning error: $e');
+      throw e;
     }
   }
 
-  Future<void> stopScanning() async {
-    await _stopScanning();
+  // ⏰ DISCOVERY TIMER - PERIODIC REFRESH
+  void _startDiscoveryTimer() {
+    _discoveryTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (_isActive && _isBluetoothEnabled) {
+        debugPrint('🔄 Refreshing discovery...');
+        _refreshDiscovery();
+      }
+    });
   }
 
+  Future<void> _refreshDiscovery() async {
+    try {
+      // Restart scanning to find new devices
+      await FlutterBluePlus.stopScan();
+      await Future.delayed(const Duration(seconds: 1));
+
+      if (_isActive) {
+        await FlutterBluePlus.startScan(
+          withServices: [Guid(SERVICE_UUID)],
+          timeout: const Duration(seconds: 30),
+          androidUsesFineLocation: false,
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ Refresh discovery error: $e');
+    }
+  }
+
+  // 📡 PROCESS SCAN RESULTS - ONLY APP USERS
   void _processScanResults(List<ScanResult> results) {
     for (final result in results) {
-      try {
-        final peerInfo = _extractPeerInfo(result);
-        if (peerInfo == null || peerInfo['deviceId'] == _deviceId) continue;
+      // Skip if no service UUIDs (shouldn't happen with filtered scan)
+      if (result.advertisementData.serviceUuids.isEmpty) continue;
 
-        final peerId = peerInfo['deviceId'] as String;
-        final peerName = peerInfo['deviceName'] as String;
+      // Check if it has our service UUID
+      bool hasOurService = result.advertisementData.serviceUuids.any((uuid) =>
+          uuid.toString().toLowerCase() == SERVICE_UUID.toLowerCase());
 
-        final peerData = PeerData(
-          deviceId: peerId,
-          deviceName: peerName,
-          discoveredAt: DateTime.now(),
-          rssi: result.rssi,
-        );
+      if (!hasOurService) continue;
 
-        if (!_discoveredPeers.containsKey(peerId)) {
-          _discoveredPeers[peerId] = peerData;
+      // Extract device info
+      String? appDeviceId = _extractDeviceId(result);
+      if (appDeviceId == null) continue;
 
-          debugPrint('✅ Discovered app user: $peerId ($peerName)');
+      // Skip self-detection
+      if (appDeviceId == _deviceId) {
+        debugPrint('⚠️ Skipping self-detection');
+        continue;
+      }
 
-          if (_discoveredPeers.length >= PEER_THRESHOLD &&
-              _firebaseStatus == 'ready') {
-            _scheduleUpload();
-          }
+      // Create peer data
+      final peerData = PeerData(
+        deviceId: appDeviceId,
+        deviceName: _getDeviceName(result, appDeviceId),
+        discoveredAt: DateTime.now(),
+        rssi: result.rssi,
+      );
 
-          notifyListeners();
+      // Add to discovered users
+      if (!_discoveredAppUsers.containsKey(appDeviceId)) {
+        _discoveredAppUsers[appDeviceId] = peerData;
+
+        debugPrint('🎉 NEW APP USER DISCOVERED:');
+        debugPrint('   ✅ Device ID: $appDeviceId');
+        debugPrint('   ✅ Device Name: ${peerData.deviceName}');
+        debugPrint('   ✅ RSSI: ${result.rssi} dBm');
+        debugPrint('   ✅ Total App Users: ${_discoveredAppUsers.length}');
+
+        // Check threshold
+        if (_discoveredAppUsers.length >= PEER_THRESHOLD) {
+          debugPrint('📤 Threshold reached! Scheduling upload...');
+          _scheduleUpload();
         }
-      } catch (e) {
-        debugPrint('Error processing device: $e');
+
+        notifyListeners();
+      } else {
+        // Update existing user
+        _discoveredAppUsers[appDeviceId] = peerData;
+        debugPrint('🔄 Updated app user: $appDeviceId (RSSI: ${result.rssi})');
       }
     }
   }
 
-  Map<String, String>? _extractPeerInfo(ScanResult result) {
-    try {
-      String deviceName = result.device.platformName.isNotEmpty
-          ? result.device.platformName
-          : result.advertisementData.advName;
+  // 🔧 EXTRACT DEVICE ID - MULTIPLE METHODS
+  String? _extractDeviceId(ScanResult result) {
+    // Method 1: From manufacturer data
+    String? deviceId = _extractFromManufacturerData(result);
+    if (deviceId != null) return deviceId;
 
-      if (deviceName.startsWith('${APP_NAME_PREFIX}_')) {
-        final parts = deviceName.split('_');
-        if (parts.length >= 2) {
-          return {
-            'deviceId': parts[1],
-            'deviceName': deviceName,
-          };
-        }
-      }
-      return null;
-    } catch (e) {
-      debugPrint('Error extracting peer info: $e');
-      return null;
-    }
+    // Method 2: From device name
+    deviceId = _extractFromDeviceName(result);
+    if (deviceId != null) return deviceId;
+
+    // Method 3: From advertisement name
+    deviceId = _extractFromAdvertisementName(result);
+    if (deviceId != null) return deviceId;
+
+    debugPrint('❌ Could not extract device ID from result');
+    return null;
   }
 
-  String? _extractIdFromManufacturerData(ScanResult result) {
+  String? _extractFromManufacturerData(ScanResult result) {
     try {
       for (final entry in result.advertisementData.manufacturerData.entries) {
-        final data = entry.value;
-        if (data.isNotEmpty) {
-          final decodedData = utf8.decode(data).trim();
-
-          if (decodedData.length >= 6 && decodedData.length <= 12) {
-            return decodedData;
+        if (entry.key == MANUFACTURER_ID) {
+          final data = entry.value;
+          if (data.length >= APP_SIGNATURE.length + 8) {
+            final decodedData = utf8.decode(data);
+            if (decodedData.startsWith(APP_SIGNATURE)) {
+              final deviceId = decodedData.substring(
+                  APP_SIGNATURE.length, APP_SIGNATURE.length + 8);
+              if (_isValidDeviceId(deviceId)) {
+                debugPrint('✅ Device ID from manufacturer data: $deviceId');
+                return deviceId;
+              }
+            }
           }
         }
       }
-      return null;
     } catch (e) {
-      debugPrint('Error extracting from manufacturer data: $e');
-      return null;
+      debugPrint('❌ Error extracting from manufacturer data: $e');
     }
+    return null;
   }
 
-  void _handleScanError(dynamic error) {
-    debugPrint('Scan error: $error');
-    _stopScanning();
-    _connectionStatus = 'scan_error';
-    notifyListeners();
+  String? _extractFromDeviceName(ScanResult result) {
+    try {
+      String deviceName = result.device.platformName;
+      if (deviceName.isNotEmpty &&
+          deviceName.startsWith('${APP_NAME_PREFIX}_')) {
+        final parts = deviceName.split('_');
+        if (parts.length >= 2 && _isValidDeviceId(parts[1])) {
+          debugPrint('✅ Device ID from device name: ${parts[1]}');
+          return parts[1];
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error extracting from device name: $e');
+    }
+    return null;
   }
 
-  Future<void> _stopScanning() async {
-    if (!_isScanning) return;
+  String? _extractFromAdvertisementName(ScanResult result) {
+    try {
+      String advName = result.advertisementData.advName;
+      if (advName.isNotEmpty && advName.startsWith('${APP_NAME_PREFIX}_')) {
+        final parts = advName.split('_');
+        if (parts.length >= 2 && _isValidDeviceId(parts[1])) {
+          debugPrint('✅ Device ID from advertisement name: ${parts[1]}');
+          return parts[1];
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error extracting from advertisement name: $e');
+    }
+    return null;
+  }
+
+  String _getDeviceName(ScanResult result, String deviceId) {
+    // Try platform name first
+    if (result.device.platformName.isNotEmpty) {
+      return result.device.platformName;
+    }
+
+    // Try advertisement name
+    if (result.advertisementData.advName.isNotEmpty) {
+      return result.advertisementData.advName;
+    }
+
+    // Generate name from device ID
+    return '${APP_NAME_PREFIX}_$deviceId';
+  }
+
+  bool _isValidDeviceId(String deviceId) {
+    return deviceId.length == 8 &&
+        RegExp(r'^[a-zA-Z0-9]{8}$').hasMatch(deviceId);
+  }
+
+  // 🛑 STOP DISCOVERY (BOTH BROADCAST AND SCAN)
+  Future<void> stopDiscovery() async {
+    await _stopDiscovery();
+  }
+
+  Future<void> _stopDiscovery() async {
+    if (!_isActive) return;
 
     try {
+      _isActive = false;
+      _discoveryTimer?.cancel();
+      _discoveryTimer = null;
+
+      // Stop scanning
       await FlutterBluePlus.stopScan();
       await _scanSubscription?.cancel();
       _scanSubscription = null;
-      _isScanning = false;
-      _connectionStatus = _isBluetoothEnabled ? 'ready' : 'bluetooth_off';
-      notifyListeners();
-    } catch (e) {
-      debugPrint('Stop scanning error: $e');
-    }
-  }
 
-  Future<void> startBroadcasting() async {
-    if (_isBroadcasting || !_isBluetoothEnabled || !await _checkPermissions())
-      return;
-
-    try {
-      _isBroadcasting = true;
-      notifyListeners();
-
-      final advertiseData = AdvertiseData(
-        includeDeviceName: true,
-        localName: _deviceName,
-        manufacturerData: utf8.encode(_deviceId),
-      );
-
-      await _blePeripheral.start(advertiseData: advertiseData);
-
-      debugPrint('🔊 Broadcasting as: $_deviceName');
-    } catch (e) {
-      debugPrint('Start broadcasting error: $e');
-      _stopBroadcasting();
-    }
-  }
-
-  Future<void> stopBroadcasting() async {
-    await _stopBroadcasting();
-  }
-
-  Future<void> _stopBroadcasting() async {
-    if (!_isBroadcasting) return;
-
-    try {
+      // Stop broadcasting
       await _blePeripheral.stop();
-      _advertisingTimer?.cancel();
-      _advertisingTimer = null;
-      _isBroadcasting = false;
-      debugPrint('🔇 Stopped broadcasting');
+
+      _connectionStatus = _isBluetoothEnabled ? 'ready' : 'bluetooth_off';
+
+      debugPrint('🛑 STOPPED PEER DISCOVERY');
+      debugPrint('   📡 Broadcasting: Stopped');
+      debugPrint('   🔍 Scanning: Stopped');
+      debugPrint('   Found ${_discoveredAppUsers.length} app users');
       notifyListeners();
     } catch (e) {
-      debugPrint('Stop broadcasting error: $e');
+      debugPrint('❌ Stop discovery error: $e');
     }
   }
 
+  void _handleDiscoveryError(dynamic error) {
+    debugPrint('❌ Discovery error: $error');
+    _stopDiscovery();
+    _connectionStatus = 'discovery_error';
+    notifyListeners();
+  }
+
+  // LEGACY METHODS FOR BACKWARD COMPATIBILITY
+  Future<void> startScanning() async => await startDiscovery();
+  Future<void> stopScanning() async => await stopDiscovery();
+  Future<void> startBroadcasting() async => await startDiscovery();
+  Future<void> stopBroadcasting() async => await stopDiscovery();
+
+  // ⏰ SCHEDULE UPLOAD
   void _scheduleUpload() {
     _uploadTimer?.cancel();
     _uploadTimer = Timer(const Duration(seconds: 2), () {
@@ -293,9 +466,14 @@ class PeerDiscoveryService extends ChangeNotifier {
     });
   }
 
+  // 📤 UPLOAD TO FIREBASE
   Future<void> uploadToFirebase() async {
-    if (_discoveredPeers.length < PEER_THRESHOLD || _firebaseStatus != 'ready')
+    if (_discoveredAppUsers.length < PEER_THRESHOLD ||
+        _firebaseStatus != 'ready') {
+      debugPrint(
+          '⚠️ Upload skipped - need ${PEER_THRESHOLD} users, have ${_discoveredAppUsers.length}');
       return;
+    }
 
     try {
       _firebaseStatus = 'uploading';
@@ -305,25 +483,28 @@ class PeerDiscoveryService extends ChangeNotifier {
         sessionId: const Uuid().v4(),
         deviceId: _deviceId,
         timestamp: DateTime.now(),
-        peersDiscovered: _discoveredPeers.values.toList(),
-        peerCount: _discoveredPeers.length,
+        peersDiscovered: _discoveredAppUsers.values.toList(),
+        peerCount: _discoveredAppUsers.length,
       );
 
-      debugPrint('📤 Uploading session with ${session.peerCount} app users');
+      debugPrint('📤 UPLOADING TO FIREBASE:');
+      debugPrint('   ✅ Session ID: ${session.sessionId}');
+      debugPrint('   ✅ My Device ID: $_deviceId');
+      debugPrint('   ✅ App Users Found: ${session.peerCount}');
+
+      for (final user in _discoveredAppUsers.values) {
+        debugPrint('   ✅ User: ${user.deviceId} (${user.deviceName})');
+      }
 
       final updates = <String, dynamic>{
         'discovery_sessions/${session.sessionId}': session.toJson(),
         'devices/$_deviceId': {
           'device_name': _deviceName,
           'last_seen': ServerValue.timestamp,
-          'app_version': '1.0.0', // Add app version tracking
-          'peers': _discoveredPeers.map((k, v) => MapEntry(k, v.toJson())),
+          'total_sessions': _uploadHistory.length + 1,
+          'discovered_users':
+              _discoveredAppUsers.map((k, v) => MapEntry(k, v.toJson())),
         },
-        // Also track the peer relationships
-        'peer_connections/${_deviceId}': {
-          'timestamp': ServerValue.timestamp,
-          'connected_peers': _discoveredPeers.keys.toList(),
-        }
       };
 
       await _database.update(updates);
@@ -331,14 +512,13 @@ class PeerDiscoveryService extends ChangeNotifier {
       _uploadHistory.insert(0, session);
       if (_uploadHistory.length > 50) _uploadHistory.removeLast();
 
+      _discoveredAppUsers.clear();
       _firebaseStatus = 'success';
 
-      // Clear discovered peers after successful upload
-      _discoveredPeers.clear();
-
-      debugPrint('✅ Successfully uploaded peer data to Firebase');
+      debugPrint('✅ FIREBASE UPLOAD SUCCESSFUL!');
       notifyListeners();
 
+      // Reset status after 2 seconds
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted) {
           _firebaseStatus = 'ready';
@@ -346,7 +526,7 @@ class PeerDiscoveryService extends ChangeNotifier {
         }
       });
     } catch (e) {
-      debugPrint('❌ Firebase upload error: $e');
+      debugPrint('❌ FIREBASE UPLOAD FAILED: $e');
       _firebaseStatus = 'error';
       notifyListeners();
 
@@ -359,41 +539,51 @@ class PeerDiscoveryService extends ChangeNotifier {
     }
   }
 
-  // Helper method to manually trigger upload (for testing)
+  // 🔄 FORCE UPLOAD
   Future<void> forceUpload() async {
-    if (_discoveredPeers.isNotEmpty) {
+    if (_discoveredAppUsers.isNotEmpty) {
+      debugPrint(
+          '🔄 Force uploading ${_discoveredAppUsers.length} app users...');
       await uploadToFirebase();
+    } else {
+      debugPrint('⚠️ No app users to upload');
     }
   }
 
-  // Method to clear discovered peers
-  void clearDiscoveredPeers() {
-    _discoveredPeers.clear();
+  // 🗑️ CLEAR DISCOVERED USERS
+  void clearDiscoveredAppUsers() {
+    final count = _discoveredAppUsers.length;
+    _discoveredAppUsers.clear();
+    debugPrint('🗑️ Cleared $count app users');
     notifyListeners();
   }
 
-  // Get statistics
+  // 📊 GET STATISTICS
   Map<String, dynamic> getStatistics() {
     return {
-      'total_sessions': _uploadHistory.length,
-      'current_peers': _discoveredPeers.length,
       'device_id': _deviceId,
       'device_name': _deviceName,
-      'is_scanning': _isScanning,
-      'is_broadcasting': _isBroadcasting,
+      'total_sessions': _uploadHistory.length,
+      'app_users_found': _discoveredAppUsers.length,
+      'is_active': _isActive,
+      'is_scanning': _isActive, // Both are same now
+      'is_broadcasting': _isActive, // Both are same now
       'bluetooth_enabled': _isBluetoothEnabled,
+      'connection_status': _connectionStatus,
+      'firebase_status': _firebaseStatus,
     };
   }
 
+  // 🔄 MOUNTED CHECK
   bool get mounted => hasListeners;
 
+  // 🧹 DISPOSE
   @override
   void dispose() {
     debugPrint('🔄 Disposing PeerDiscoveryService');
-    _stopScanning();
-    _stopBroadcasting();
+    _stopDiscovery();
     _uploadTimer?.cancel();
-    _advertisingTimer?.cancel();
+    _discoveryTimer?.cancel();
     _bluetoothStateSubscription?.cancel();
     super.dispose();
   }
