@@ -1,27 +1,25 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:ble_firebase_app/models/peer_data.dart';
-import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 
+import '../studentApi.dart';
+
 class PeerDiscoveryService extends ChangeNotifier {
   // 🔑 UNIQUE IDENTIFIERS - Simplified for reliability
   static const String SERVICE_UUID = "12345678-1234-5678-9abc-123456789012";
   static const String CHARACTERISTIC_UUID =
       "12345678-1234-5678-9abc-123456789013";
-  static const String APP_SIGNATURE = "PEERAPP2024";
-  static const String APP_NAME_PREFIX = "PeerApp";
+  static const String APP_SIGNATURE = "AttendenceSystem";
+  static const String APP_NAME_PREFIX = "Attendence";
   static const int PEER_THRESHOLD = 2;
-  static const int MANUFACTURER_ID =
-      0x004C; // Apple's manufacturer ID (more reliable)
+  static const int MANUFACTURER_ID = 0x004C; // Apple's manufacturer ID (more reliable)
 
   // 📱 DEVICE INFO
-  final DatabaseReference _database;
   final String _deviceId;
   final String _deviceName;
 
@@ -30,10 +28,12 @@ class PeerDiscoveryService extends ChangeNotifier {
   bool _isBluetoothEnabled = false;
   String _connectionStatus = 'disconnected';
   String _firebaseStatus = 'ready';
+  bool strtAttendence=false;
 
   // 📊 DATA STORAGE - ONLY APP USERS
   final Map<String, PeerData> _discoveredAppUsers = {};
   final List<DiscoverySession> _uploadHistory = [];
+  final Map<String, int> _peerCounts = {};
 
   // 🎛️ SUBSCRIPTIONS & TIMERS
   StreamSubscription<List<ScanResult>>? _scanSubscription;
@@ -41,13 +41,24 @@ class PeerDiscoveryService extends ChangeNotifier {
   Timer? _uploadTimer;
   Timer? _discoveryTimer;
   final FlutterBlePeripheral _blePeripheral = FlutterBlePeripheral();
+  final List<Map<String, String>> _subjects = [
+    {"id": "ds", "title": "📘 Data Structures", "time": "10:00 AM – 11:00 AM"},
+    {"id": "os", "title": "📗 Operating Systems", "time": "11:00 AM – 12:00 PM"},
+    {"id": "dbms", "title": "📕 Database Systems", "time": "12:00 PM – 01:00 PM"},
+    {"id": "cn", "title": "🌐 Computer Networks", "time": "01:00 PM – 02:00 PM"},
+    {"id": "se", "title": "🛠️ Software Engineering", "time": "02:00 PM – 03:00 PM"},
+    {"id": "ai", "title": "🤖 Artificial Intelligence", "time": "03:00 PM – 04:00 PM"},
+    {"id": "ml", "title": "📊 Machine Learning", "time": "04:00 PM – 05:00 PM"},
+    {"id": "iot", "title": "📡 Internet of Things", "time": "09:00 AM – 10:00 AM"},
+    {"id": "cc", "title": "☁️ Cloud Computing", "time": "08:00 AM – 09:00 AM"},
+    {"id": "cyber", "title": "🔒 Cyber Security", "time": "05:00 PM – 06:00 PM"},
+    {"id": "oslab", "title": "💻 OS Lab", "time": "06:00 PM – 07:00 PM"},
+    {"id": "dsalab", "title": "🔬 DSA Lab", "time": "07:00 PM – 08:00 PM"},
+  ];
 
   // 🚀 CONSTRUCTOR
-  PeerDiscoveryService()
-      : _database = FirebaseDatabase.instance.ref(),
-        _deviceId = const Uuid().v4().substring(0, 8),
-        _deviceName =
-            '${APP_NAME_PREFIX}_${const Uuid().v4().substring(0, 8)}' {
+  PeerDiscoveryService(this._deviceId, this._deviceName)
+        {
     _initializeBluetooth();
     _checkPermissions();
   }
@@ -65,7 +76,36 @@ class PeerDiscoveryService extends ChangeNotifier {
   List<String> get appUserIds => _discoveredAppUsers.keys.toList();
   int get appUserCount => _discoveredAppUsers.length;
   List<DiscoverySession> get uploadHistory => _uploadHistory;
+  Map<String, int> get peerCounts=>_peerCounts;
+  List<Map<String, String>> get subjects=>_subjects;
 
+
+  Map<String,dynamic> _studentList = {};
+
+  Map<String,dynamic>get studentList => _studentList;
+
+  Future<void> fetchRoster() async {
+    try {
+      _studentList = await Studentapi.fetchClassRoster();
+      notifyListeners();
+    } catch (e) {
+      debugPrint("❌ Failed to fetch roster: $e");
+    }
+  }
+
+  void clearRoster() {
+    _studentList = {};
+    notifyListeners();
+  }
+
+  //initialize peer map
+  void intializePeerMap(){
+    for (var subject in subjects) {
+      peerCounts[subject["id"]!] = 0;
+      // peers[subject["id"]!] = [];
+    }
+    notifyListeners();
+  }
   // 🔵 BLUETOOTH INITIALIZATION
   Future<void> _initializeBluetooth() async {
     try {
@@ -84,7 +124,6 @@ class PeerDiscoveryService extends ChangeNotifier {
         if (!_isBluetoothEnabled) {
           _stopDiscovery();
         }
-
         debugPrint('🔵 Bluetooth state: ${_isBluetoothEnabled ? 'ON' : 'OFF'}');
         notifyListeners();
       });
@@ -92,7 +131,6 @@ class PeerDiscoveryService extends ChangeNotifier {
       final state = await FlutterBluePlus.adapterState.first;
       _isBluetoothEnabled = state == BluetoothAdapterState.on;
       _connectionStatus = _isBluetoothEnabled ? 'ready' : 'bluetooth_off';
-
       debugPrint(
           '🔵 Bluetooth initialized: ${_isBluetoothEnabled ? 'Ready' : 'Not Ready'}');
       notifyListeners();
@@ -102,7 +140,6 @@ class PeerDiscoveryService extends ChangeNotifier {
       notifyListeners();
     }
   }
-
   // 🔐 PERMISSION HANDLING
   Future<bool> _checkPermissions() async {
     try {
@@ -125,7 +162,6 @@ class PeerDiscoveryService extends ChangeNotifier {
           return false;
         }
       }
-
       debugPrint('✅ All permissions granted');
       return true;
     } catch (e) {
@@ -137,7 +173,7 @@ class PeerDiscoveryService extends ChangeNotifier {
   }
 
   // 🚀 START PEER DISCOVERY (BOTH BROADCAST AND SCAN)
-  Future<void> startDiscovery() async {
+  Future<void> startDiscovery(String StudentName,String StudentId) async {
     if (_isActive || !_isBluetoothEnabled) {
       debugPrint(
           '⚠️ Cannot start discovery: isActive=$_isActive, bluetoothEnabled=$_isBluetoothEnabled');
@@ -164,7 +200,7 @@ class PeerDiscoveryService extends ChangeNotifier {
       _discoveredAppUsers.clear();
 
       // Start both broadcasting and scanning simultaneously
-      await _startBroadcasting();
+      await _startBroadcasting(StudentName,StudentId);
       await _startScanning();
 
       // Start continuous discovery with periodic refresh
@@ -176,15 +212,15 @@ class PeerDiscoveryService extends ChangeNotifier {
   }
 
   // 📡 START BROADCASTING
-  Future<void> _startBroadcasting() async {
+  Future<void> _startBroadcasting(String StudentName,String StudentId) async {
     try {
       // Create manufacturer data with app signature and device ID
       final manufacturerDataString = '$APP_SIGNATURE$_deviceId';
-      final manufacturerDataBytes = utf8.encode(manufacturerDataString);
+      final manufacturerDataBytes = utf8.encode("$StudentId|$StudentName");
 
       final advertiseData = AdvertiseData(
-        includeDeviceName: true,
-        localName: _deviceName,
+        includeDeviceName: false,
+        localName: "${StudentName}-${StudentId}",
         manufacturerData: manufacturerDataBytes,
         manufacturerId: MANUFACTURER_ID,
         serviceUuid: SERVICE_UUID,
@@ -193,8 +229,8 @@ class PeerDiscoveryService extends ChangeNotifier {
       await _blePeripheral.start(advertiseData: advertiseData);
 
       debugPrint('📡 BROADCASTING STARTED:');
-      debugPrint('   ✅ Device Name: $_deviceName');
-      debugPrint('   ✅ Device ID: $_deviceId');
+      debugPrint('   ✅ Device Name: $StudentName');
+      debugPrint('   ✅ Device ID: $manufacturerDataBytes');
       debugPrint('   ✅ Service UUID: $SERVICE_UUID');
       debugPrint('   ✅ Other app users can now discover this device!');
     } catch (e) {
@@ -215,7 +251,6 @@ class PeerDiscoveryService extends ChangeNotifier {
         timeout: const Duration(seconds: 30),
         androidUsesFineLocation: false,
       );
-
       _scanSubscription = FlutterBluePlus.scanResults.listen(
         (results) {
           if (results.isNotEmpty) {
@@ -262,60 +297,91 @@ class PeerDiscoveryService extends ChangeNotifier {
     }
   }
 
-  // 📡 PROCESS SCAN RESULTS - ONLY APP USERS
+
   void _processScanResults(List<ScanResult> results) {
     for (final result in results) {
-      // Skip if no service UUIDs (shouldn't happen with filtered scan)
+      print("result: $result");
+
+      // Skip if no service UUIDs
       if (result.advertisementData.serviceUuids.isEmpty) continue;
 
       // Check if it has our service UUID
       bool hasOurService = result.advertisementData.serviceUuids.any((uuid) =>
-          uuid.toString().toLowerCase() == SERVICE_UUID.toLowerCase());
+      uuid.toString().toLowerCase() == SERVICE_UUID.toLowerCase());
 
       if (!hasOurService) continue;
 
-      // Extract device info
-      String? appDeviceId = _extractDeviceId(result);
-      if (appDeviceId == null) continue;
+      // 👇 Decode from manufacturerData instead of localName
+      String studentId = "";
+      String studentName = "";
+
+      for (final entry in result.advertisementData.manufacturerData.entries) {
+        try {
+          final decoded = utf8.decode(entry.value);
+          if (decoded.contains("|")) {
+            final parts = decoded.split("|");
+            if (parts.length >= 2) {
+              studentId = parts[0];
+              studentName = parts[1];
+            }
+          }
+        } catch (e) {
+          debugPrint("⚠️ Failed to decode manufacturerData: $e");
+        }
+      }
+
+      if (studentId.isEmpty || studentName.isEmpty) {
+        debugPrint("⚠️ Skipping device with no valid student info");
+        continue;
+      }
+
+      // 🔤 Convert full name -> initials
+      final initials = studentName
+          .split(" ")
+          .where((part) => part.isNotEmpty)
+          .map((part) => part[0].toUpperCase())
+          .join();
+
+      debugPrint("📡 Received Advertisement:");
+      debugPrint("   StudentId: $studentId");
+      debugPrint("   StudentName: $studentName -> Initials: $initials");
+      debugPrint("   RSSI: ${result.rssi} dBm");
 
       // Skip self-detection
-      if (appDeviceId == _deviceId) {
+      if (studentId == _deviceId) {
         debugPrint('⚠️ Skipping self-detection');
         continue;
       }
 
-      // Create peer data
+      // Create peer data (using initials 👇)
       final peerData = PeerData(
-        deviceId: appDeviceId,
-        deviceName: _getDeviceName(result, appDeviceId),
+        deviceId: studentId,
+        deviceName: initials, // store initials instead of full name
         discoveredAt: DateTime.now(),
         rssi: result.rssi,
       );
 
       // Add to discovered users
-      if (!_discoveredAppUsers.containsKey(appDeviceId)) {
-        _discoveredAppUsers[appDeviceId] = peerData;
-
+      if (!_discoveredAppUsers.containsKey(studentId)) {
+        _discoveredAppUsers[studentId] = peerData;
         debugPrint('🎉 NEW APP USER DISCOVERED:');
-        debugPrint('   ✅ Device ID: $appDeviceId');
-        debugPrint('   ✅ Device Name: ${peerData.deviceName}');
-        debugPrint('   ✅ RSSI: ${result.rssi} dBm');
+        debugPrint('   ✅ StudentId: $studentId');
+        debugPrint('   ✅ StudentInitials: $initials');
         debugPrint('   ✅ Total App Users: ${_discoveredAppUsers.length}');
 
-        // Check threshold
         if (_discoveredAppUsers.length >= PEER_THRESHOLD) {
           debugPrint('📤 Threshold reached! Scheduling upload...');
-          _scheduleUpload();
         }
 
         notifyListeners();
       } else {
         // Update existing user
-        _discoveredAppUsers[appDeviceId] = peerData;
-        debugPrint('🔄 Updated app user: $appDeviceId (RSSI: ${result.rssi})');
+        _discoveredAppUsers[studentId] = peerData;
+        debugPrint('🔄 Updated app user: $studentId (RSSI: ${result.rssi})');
       }
     }
   }
+
 
   // 🔧 EXTRACT DEVICE ID - MULTIPLE METHODS
   String? _extractDeviceId(ScanResult result) {
@@ -453,102 +519,16 @@ class PeerDiscoveryService extends ChangeNotifier {
   }
 
   // LEGACY METHODS FOR BACKWARD COMPATIBILITY
-  Future<void> startScanning() async => await startDiscovery();
-  Future<void> stopScanning() async => await stopDiscovery();
-  Future<void> startBroadcasting() async => await startDiscovery();
-  Future<void> stopBroadcasting() async => await stopDiscovery();
+  // Future<void> startScanning() async => await startDiscovery('','');
+  // Future<void> stopScanning() async => await stopDiscovery();
+  // Future<void> startBroadcasting() async => await startDiscovery('','');
+  // Future<void> stopBroadcasting() async => await stopDiscovery();
 
   // ⏰ SCHEDULE UPLOAD
-  void _scheduleUpload() {
-    _uploadTimer?.cancel();
-    _uploadTimer = Timer(const Duration(seconds: 2), () {
-      uploadToFirebase();
-    });
-  }
 
   // 📤 UPLOAD TO FIREBASE
-  Future<void> uploadToFirebase() async {
-    if (_discoveredAppUsers.length < PEER_THRESHOLD ||
-        _firebaseStatus != 'ready') {
-      debugPrint(
-          '⚠️ Upload skipped - need ${PEER_THRESHOLD} users, have ${_discoveredAppUsers.length}');
-      return;
-    }
-
-    try {
-      _firebaseStatus = 'uploading';
-      notifyListeners();
-
-      final session = DiscoverySession(
-        sessionId: const Uuid().v4(),
-        deviceId: _deviceId,
-        timestamp: DateTime.now(),
-        peersDiscovered: _discoveredAppUsers.values.toList(),
-        peerCount: _discoveredAppUsers.length,
-      );
-
-      debugPrint('📤 UPLOADING TO FIREBASE:');
-      debugPrint('   ✅ Session ID: ${session.sessionId}');
-      debugPrint('   ✅ My Device ID: $_deviceId');
-      debugPrint('   ✅ App Users Found: ${session.peerCount}');
-
-      for (final user in _discoveredAppUsers.values) {
-        debugPrint('   ✅ User: ${user.deviceId} (${user.deviceName})');
-      }
-
-      final updates = <String, dynamic>{
-        'discovery_sessions/${session.sessionId}': session.toJson(),
-        'devices/$_deviceId': {
-          'device_name': _deviceName,
-          'last_seen': ServerValue.timestamp,
-          'total_sessions': _uploadHistory.length + 1,
-          'discovered_users':
-              _discoveredAppUsers.map((k, v) => MapEntry(k, v.toJson())),
-        },
-      };
-
-      await _database.update(updates);
-
-      _uploadHistory.insert(0, session);
-      if (_uploadHistory.length > 50) _uploadHistory.removeLast();
-
-      _discoveredAppUsers.clear();
-      _firebaseStatus = 'success';
-
-      debugPrint('✅ FIREBASE UPLOAD SUCCESSFUL!');
-      notifyListeners();
-
-      // Reset status after 2 seconds
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) {
-          _firebaseStatus = 'ready';
-          notifyListeners();
-        }
-      });
-    } catch (e) {
-      debugPrint('❌ FIREBASE UPLOAD FAILED: $e');
-      _firebaseStatus = 'error';
-      notifyListeners();
-
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) {
-          _firebaseStatus = 'ready';
-          notifyListeners();
-        }
-      });
-    }
-  }
 
   // 🔄 FORCE UPLOAD
-  Future<void> forceUpload() async {
-    if (_discoveredAppUsers.isNotEmpty) {
-      debugPrint(
-          '🔄 Force uploading ${_discoveredAppUsers.length} app users...');
-      await uploadToFirebase();
-    } else {
-      debugPrint('⚠️ No app users to upload');
-    }
-  }
 
   // 🗑️ CLEAR DISCOVERED USERS
   void clearDiscoveredAppUsers() {

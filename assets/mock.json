@@ -1,0 +1,13 @@
+{
+  "class": "ECE-3A",
+  "teacher_id": "T1001",
+  "date": "2025-09-03",
+  "students": [
+    { "student_id": "S101", "name": "Udit Soni" },
+    { "student_id": "S102", "name": "Vikas Upadhyay" },
+    { "student_id": "S103", "name": "Rahul Verma" },
+    { "student_id": "S104", "name": "Priya Gupta" },
+    { "student_id": "S105", "name": "Aman Singh" }
+  ],
+  "beacon": ""
+}

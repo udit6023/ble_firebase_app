@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/peer_data.dart';
+import '../studentApi.dart';
 
 class PeerDiscoveryScreen extends StatefulWidget {
   @override
@@ -10,15 +11,25 @@ class PeerDiscoveryScreen extends StatefulWidget {
 }
 
 class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
+
+  Map<String, dynamic> studentList={};
   @override
   void initState() {
     super.initState();
+    fetchRoaster();
     // Ensure the service is properly initialized when screen loads
     WidgetsBinding.instance.addPostFrameCallback((_) {
+
       final service = Provider.of<PeerDiscoveryService>(context, listen: false);
       debugPrint(
           '🖥️ Screen initialized - Service status: ${service.connectionStatus}');
     });
+  }
+
+  Future<void> fetchRoaster() async {
+    studentList=await Studentapi.fetchClassRoster();
+    print("studentList:${studentList}");
+    setState(() {});
   }
 
   @override
@@ -37,7 +48,7 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
             child: SafeArea(
               child: Column(
                 children: [
-                  _buildHeader(service),
+                  _buildHeader(service,studentList),
                   Expanded(
                       child: Container(
                     margin: const EdgeInsets.all(16),
@@ -57,9 +68,9 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                         child: SingleChildScrollView(
                           child: Column(
                             children: [
-                              _buildControls(context, service),
-                              _buildStatusIndicators(service),
-                              _buildThresholdIndicator(service),
+                              _buildControls(context, service,studentList),
+                              //_buildStatusIndicators(service),
+                              //_buildThresholdIndicator(service),
                               Container(
                                 height: 200, // Fixed height to prevent overflow
                                 child: _buildDiscoveredPeers(service),
@@ -83,7 +94,7 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
     );
   }
 
-  Widget _buildHeader(PeerDiscoveryService service) {
+  Widget _buildHeader(PeerDiscoveryService service,Map<String,dynamic> studentList) {
     return Container(
       padding: const EdgeInsets.all(24),
       child: Row(
@@ -95,10 +106,8 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
-              service.isBluetoothEnabled
-                  ? (service.isActive ? Icons.sync : Icons.bluetooth)
-                  : Icons.bluetooth_disabled,
-              color: Colors.white,
+               Icons.perm_contact_cal_outlined,
+              color: Colors.black,
               size: 28,
             ),
           ),
@@ -108,46 +117,29 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Peer Discovery',
+                  'Student Profile',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: Colors.white,
+                    color: Colors.black,
                   ),
                 ),
                 Text(
-                  'ID: ${service.deviceId}',
+                  'ID: ${studentList['students'][0]['student_id']}',
                   style: const TextStyle(
                     fontSize: 14,
-                    color: Colors.white70,
+                    color: Colors.black26,
                     fontFamily: 'monospace',
                   ),
                 ),
                 Text(
-                  'Name: ${service.deviceName}',
+                  'Name: ${studentList['students'][0]['name']}',
                   style: const TextStyle(
                     fontSize: 12,
-                    color: Colors.white60,
+                    color: Colors.black38,
                   ),
                 ),
-                if (service.isActive)
-                  Container(
-                    margin: const EdgeInsets.only(top: 4),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(0.8),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text(
-                      '🔄 DISCOVERING PEERS',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
+
               ],
             ),
           ),
@@ -156,7 +148,7 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
     );
   }
 
-  Widget _buildControls(BuildContext context, PeerDiscoveryService service) {
+  Widget _buildControls(BuildContext context, PeerDiscoveryService service,Map<String, dynamic> studentList) {
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -169,19 +161,16 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                   ? (service.isActive
                       ? () async {
                           debugPrint('🛑 User stopping discovery...');
+
                           await service.stopDiscovery();
                         }
                       : () async {
                           debugPrint('🚀 User starting discovery...');
-                          await service.startDiscovery();
+                          await service.startDiscovery(studentList['students'][0]['name'],studentList['students'][0]['student_id']);
                         })
                   : null,
-              icon: Icon(
-                service.isActive ? Icons.stop : Icons.sync,
-                size: 24,
-              ),
               label: Text(
-                service.isActive ? 'Stop Discovery' : 'Start Discovery',
+                service.isActive ? 'Attendence Marked' : 'Mark Attendence',
                 style: const TextStyle(
                   fontWeight: FontWeight.w600,
                   fontSize: 16,
@@ -200,79 +189,48 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
           ),
 
           const SizedBox(height: 16),
-
-          // Discovery Mode Explanation
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.blue[50],
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.blue[200]!),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.info_outline, color: Colors.blue[700], size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    service.isActive
-                        ? '📡 Broadcasting & 🔍 Scanning simultaneously'
-                        : 'Tap to start broadcasting AND scanning for peers',
-                    style: TextStyle(
-                      color: Colors.blue[700],
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
           // Additional action buttons
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: service.discoveredPeers.isNotEmpty
-                      ? () async {
-                          debugPrint('🔄 User forcing upload...');
-                          await service.forceUpload();
-                        }
-                      : null,
-                  icon: const Icon(Icons.cloud_upload, size: 18),
-                  label: const Text('Force Upload'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: service.discoveredPeers.isNotEmpty
-                      ? () {
-                          debugPrint('🗑️ User clearing discovered peers...');
-                          service.clearDiscoveredAppUsers();
-                        }
-                      : null,
-                  icon: const Icon(Icons.clear_all, size: 18),
-                  label: const Text('Clear All'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          // Row(
+          //   children: [
+          //     Expanded(
+          //       child: OutlinedButton.icon(
+          //         onPressed: service.discoveredPeers.isNotEmpty
+          //             ? () async {
+          //                 debugPrint('🔄 User forcing upload...');
+          //                 await service.forceUpload();
+          //               }
+          //             : null,
+          //         icon: const Icon(Icons.cloud_upload, size: 18),
+          //         label: const Text('Force Upload'),
+          //         style: OutlinedButton.styleFrom(
+          //           padding: const EdgeInsets.symmetric(vertical: 12),
+          //           shape: RoundedRectangleBorder(
+          //             borderRadius: BorderRadius.circular(8),
+          //           ),
+          //         ),
+          //       ),
+          //     ),
+          //     const SizedBox(width: 12),
+          //     Expanded(
+          //       child: OutlinedButton.icon(
+          //         onPressed: service.discoveredPeers.isNotEmpty
+          //             ? () {
+          //                 debugPrint('🗑️ User clearing discovered peers...');
+          //                 service.clearDiscoveredAppUsers();
+          //               }
+          //             : null,
+          //         icon: const Icon(Icons.clear_all, size: 18),
+          //         label: const Text('Clear All'),
+          //         style: OutlinedButton.styleFrom(
+          //           padding: const EdgeInsets.symmetric(vertical: 12),
+          //           shape: RoundedRectangleBorder(
+          //             borderRadius: BorderRadius.circular(8),
+          //           ),
+          //         ),
+          //       ),
+          //     ),
+          //   ],
+          // ),
         ],
       ),
     );
@@ -453,7 +411,7 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Discovered Peers',
+                'Other Students',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
@@ -507,8 +465,8 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
           const SizedBox(height: 16),
           Text(
             service.isActive
-                ? 'Searching for peers...'
-                : 'No peers discovered yet',
+                ? 'Searching for students...'
+                : 'No Students here yet',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w500,
@@ -516,16 +474,6 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            service.isActive
-                ? 'Make sure other devices are running the app'
-                : 'Start discovery to find nearby peers',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[500],
-            ),
-            textAlign: TextAlign.center,
-          ),
           if (service.isActive) ...[
             const SizedBox(height: 16),
             const SizedBox(
@@ -612,26 +560,6 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    signalStrength['icon'],
-                    size: 16,
-                    color: signalStrength['color'],
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${peer.rssi} dBm',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: signalStrength['color'],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
